@@ -1,0 +1,15 @@
+# 统一换行符：仓库内部存 LF，检出到 Windows 时自动转 CRLF
+* text=auto
+
+# 二进制文件不做换行符转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.a binary
+*.lib binary
+*.bin binary
+*.zip binary
+*.rar binary

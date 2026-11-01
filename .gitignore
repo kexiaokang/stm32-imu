@@ -1,0 +1,62 @@
+# ============================================
+#  STM32 / RT-Thread 项目 .gitignore
+#  原则：只提交"源码 + 工程配置"，不提交编译产物和个人配置
+# ============================================
+
+# ---------- 文档资料（体积大，本地保留即可）----------
+/docs/
+
+# ---------- 编译产物 ----------
+build/
+Debug/
+Release/
+Objects/
+*.o
+*.obj
+*.d
+*.dep
+*.crf
+*.axf
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+*.lnp
+*.iex
+*.i
+*.out
+*.pdb
+*.idb
+*.ilk
+
+# ---------- Keil / MDK 个人配置 ----------
+*.uvguix*
+*.uvopt.bak
+*.uvproj.bak
+JLinkLog.txt
+JLinkSettings.ini
+DebugConfig/
+RTE/
+*.scvd
+
+# ---------- 编辑器 / IDE ----------
+.vscode/
+.idea/
+*.bak
+*~
+*.swp
+
+# ---------- Python ----------
+__pycache__/
+*.pyc
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 工具缓存 ----------
+.workbuddy-ai/
+
+# 注意：libraries/ 下的 *.lib 是厂商预编译库，必须提交，切勿忽略！
