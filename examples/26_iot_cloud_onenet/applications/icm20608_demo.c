@@ -7,6 +7,7 @@
 #define ACCEL_XOUT_H 0x3B
 
 static struct rt_i2c_bus_device *i2c_bus = RT_NULL;
+static rt_uint32_t g_icm_err = 0;   /* 放文件顶部；循环里读失败就 g_icm_err++ 并打印
 
 /**
  * @brief 扫描 i2c1/i2c2/i2c3 三条总线上的从机设备并打印地址
@@ -65,6 +66,18 @@ static rt_err_t icm_read_regs(rt_uint8_t reg, rt_uint8_t *buf, rt_uint8_t len)
     return (rt_i2c_transfer(i2c_bus, msgs, 2) == 2) ? RT_EOK : -RT_ERROR;
 }
 
+// MSH_CMD_EXPORT(icm_tick_test, measure real period);
+
+static rt_err_t icm_read_retry(rt_uint8_t reg, rt_uint8_t *buf, rt_uint8_t len)
+{
+    for (int i = 0; i < 3; i++) {
+        if (icm_read_regs(reg, buf, len) == RT_EOK) return RT_EOK;
+        rt_thread_mdelay(5);
+    }
+    return -RT_ERROR;
+}
+
+
 void icm_demo(void)
 {
     i2c_bus = (struct rt_i2c_bus_device *)rt_device_find("i2c1");  /* 总线名以 i2c_scan 结果为准 */
@@ -77,17 +90,73 @@ void icm_demo(void)
     icm_write_reg(PWR_MGMT_1, 0x80);                                /* DEVICE_RESET：软复位，清空所有寄存器为默认值 */
     rt_thread_mdelay(100);                                          /* 等待复位完成 */
     icm_write_reg(PWR_MGMT_1, 0x01);                                /* CLKSEL=1：关闭睡眠并选 PLL 作为时钟源 */
-    rt_thread_mdelay(10);                                           /* 等待时钟稳定后开始采样 */
+    rt_thread_mdelay(10);    
+
+    icm_write_reg(0x1A, 0x03);  /* CONFIG: DLPF 44Hz；开了 DLPF 后陀螺基频 1kHz */
+    icm_write_reg(0x19, 0x09);  /* SMPLRT_DIV: ODR = 1000/(1+9) = 100Hz */
+    icm_write_reg(0x1B, 0x00);  /* GYRO_CONFIG: ±250dps */
+    icm_write_reg(0x1C, 0x00);  /* ACCEL_CONFIG: ±2g → 16384 LSB/g */                                       /* 等待时钟稳定后开始采样 */
 
     for (int i = 0; i < 20; i++) {                                  /* 连续采样 20 次用于观察数据 */
         rt_uint8_t d[6];
-        if (icm_read_regs(ACCEL_XOUT_H, d, 6) == RT_EOK) {          /* 从 0x3B 起一次读 6 字节：X/Y/Z 各 2 字节高字节在前 */
+        if (icm_read_retry(ACCEL_XOUT_H, d, 6) == RT_EOK) {          /* 从 0x3B 起一次读 6 字节：X/Y/Z 各 2 字节高字节在前 */
             short ax = (short)((d[0] << 8) | d[1]);                 /* 拼接并转有符号：加速度 X 原始值 */
             short ay = (short)((d[2] << 8) | d[3]);                 /* Y 轴原始值 */
             short az = (short)((d[4] << 8) | d[5]);                 /* Z 轴原始值 */
             rt_kprintf("acc: %d, %d, %d\n", ax, ay, az);
         }
+        else {
+            g_icm_err++;                                        /* ← 新增：失败计数 */
+            rt_kprintf("read fail, total err = %d\n", g_icm_err);
+        }
         rt_thread_mdelay(200);                                      /* 采样间隔 200ms */
     }
 }
 MSH_CMD_EXPORT(icm_demo, read icm20608 accel);
+
+
+void icm_tick_test(void)
+{
+    rt_tick_t last = rt_tick_get();
+    for (int i = 0; i < 10; i++) {
+        rt_thread_mdelay(200);
+        rt_tick_t now = rt_tick_get();
+        rt_kprintf("period = %d tick\n", now - last);   /* 潘多拉 1 tick = 1ms */
+        last = now;
+    }
+}
+MSH_CMD_EXPORT(icm_tick_test, measure real period);
+
+
+static struct rt_semaphore g_smp_sem;
+static rt_timer_t g_smp_timer;
+
+static void smp_cb(void *param)
+{
+    rt_sem_release(&g_smp_sem);   /* 中断里只干这一件事 */
+}
+
+void icm_sample_100hz(void)
+{
+    i2c_bus = (struct rt_i2c_bus_device *)rt_device_find("i2c1");
+    if (i2c_bus == RT_NULL) { rt_kprintf("i2c1 not found\n"); return; }
+
+    rt_sem_init(&g_smp_sem, "smp", 0, RT_IPC_FLAG_PRIO);
+    g_smp_timer = rt_timer_create("smp", smp_cb, RT_NULL,
+                                  RT_TICK_PER_SECOND / 100,   /* 10ms = 100Hz */
+                                  RT_TIMER_FLAG_PERIODIC);
+    if (g_smp_timer == RT_NULL) { rt_kprintf("timer create fail\n"); return; }
+    rt_timer_start(g_smp_timer);
+
+    rt_uint32_t ok = 0, err = 0;
+    rt_tick_t t0 = rt_tick_get();
+    while (ok + err < 500) {                /* 理论 5 秒 */
+        rt_sem_take(&g_smp_sem, RT_WAITING_FOREVER);
+        rt_uint8_t d[6];
+        if (icm_read_retry(ACCEL_XOUT_H, d, 6) == RT_EOK) ok++;
+        else err++;
+    }
+    rt_timer_stop(g_smp_timer);
+    rt_kprintf("ok=%d err=%d elapsed=%d tick\n", ok, err, rt_tick_get() - t0);
+}
+MSH_CMD_EXPORT(icm_sample_100hz, 100Hz sampling via timer and sem);
