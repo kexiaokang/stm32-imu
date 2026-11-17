@@ -73,7 +73,7 @@ static rt_err_t imu_init(void)
 }
 
 /* 一次采样：加速度 6 字节 + 陀螺 6 字节，分两次读（避开温度寄存器 0x41-0x42） */
-static rt_err_t imu_sample_once(struct imu_sample *s)
+static rt_err_t imu_sample_once(struct imu_sample *s)//单次采样
 {
     rt_uint8_t d[6];
 
@@ -94,26 +94,26 @@ static rt_err_t imu_sample_once(struct imu_sample *s)
 static void log_cb(void *param)
 {
     s_tick++;
-    rt_sem_release(&g_tick_sem);
+    rt_sem_release(&g_tick_sem);    // 释放信号量，叫醒采样线程
 }
 
 /* 采样线程：等节拍 -> 读传感器 -> 写环形缓冲 */
-static void log_thread(void *param)
+static void log_thread(void *param)     //采样线程
 {
     struct imu_sample s;
 
     while (s_tick < s_target && !s_abort)
-    {
+    {       // 1. 等信号量（等定时器滴答），最多等 200ms
         if (rt_sem_take(&g_tick_sem, rt_tick_from_millisecond(200)) != RT_EOK) continue;
-
+            // 2. 缓冲满了就丢点
         if (s_wr - s_rd >= RB_CAP) { s_ovf++; continue; }   /* 缓冲满：丢点 */
-
+            // 3. 读传感器，成功就写入环形缓冲
         if (imu_sample_once(&s) == RT_EOK) s_rb[s_wr++ % RB_CAP] = s;
         else s_ovf++;
     }
 
-    rt_timer_stop(g_log_timer);
-    s_finish = 1;
+    rt_timer_stop(g_log_timer);// 采够了，停定时器
+    s_finish = 1;              // 通知主线程"我完成了"
     rt_kprintf("sampling done: %d pts, ovf=%d\n", (int)s_wr, (int)s_ovf);
 }
 
@@ -128,55 +128,65 @@ static void dump_csv(void)
     }
 }
 
-/* msh 命令：imulog <点数>
- * 例：imulog 1024  -> 采 10.24 秒后自动导出 CSV
+/**
+ * @brief  msh 命令：以 100Hz 采样 IMU 指定点数，采完后自动导出 CSV
+ *
+ * 首次调用会自动查找 i2c1 并初始化 ICM 传感器；采样由周期性定时器发节拍、
+ * 独立线程读传感器并写入环形缓冲，本函数只负责等待完成与导出数据。
+ * 例：imulog 1024 -> 采 10.24 秒后自动导出 CSV
+ *
+ * @param  argc  参数个数
+ * @param  argv  argv[1] 为目标采样点数，范围 1..RB_CAP，缺省为 RB_CAP
+ *
+ * @return 无。结果通过 rt_kprintf 输出；参数非法、i2c1 不存在、
+ *         传感器初始化失败、线程创建失败或等待超时会提前返回
  */
 void imulog(int argc, char **argv)
 {
-    rt_uint32_t n = RB_CAP;
+    rt_uint32_t n = RB_CAP;                 // 默认采满整个环形缓冲
 
-    if (argc > 1) n = (rt_uint32_t)atoi(argv[1]);
-    if (n == 0 || n > RB_CAP) { rt_kprintf("usage: imulog <1..%d>\n", RB_CAP); return; }
+    if (argc > 1) n = (rt_uint32_t)atoi(argv[1]);   // 取命令行指定的点数
+    if (n == 0 || n > RB_CAP) { rt_kprintf("usage: imulog <1..%d>\n", RB_CAP); return; }  // 点数必须落在 1..RB_CAP
 
-    if (s_bus == RT_NULL)
+    if (s_bus == RT_NULL)                   // 首次调用：查找 I2C 总线并初始化传感器
     {
         s_bus = (struct rt_i2c_bus_device *)rt_device_find("i2c1");
         if (s_bus == RT_NULL) { rt_kprintf("i2c1 not found\n"); return; }
-        if (imu_init() != RT_EOK) { rt_kprintf("imu init fail\n"); s_bus = RT_NULL; return; }
+        if (imu_init() != RT_EOK) { rt_kprintf("imu init fail\n"); s_bus = RT_NULL; return; }  // 失败则清空句柄以便下次重试
         rt_kprintf("imu ready, odr=100Hz\n");
     }
 
-    if (!s_inited)
+    if (!s_inited)                          // 首次调用：创建 IPC 与 100Hz 周期定时器
     {
         rt_sem_init(&g_tick_sem, "tick", 0, RT_IPC_FLAG_PRIO);
         g_log_timer = rt_timer_create("log", log_cb, RT_NULL,
-                                      RT_TICK_PER_SECOND / 100, RT_TIMER_FLAG_PERIODIC);
+                                      RT_TICK_PER_SECOND / 100, RT_TIMER_FLAG_PERIODIC);  // 10ms 周期 = 100Hz
         if (g_log_timer == RT_NULL) { rt_kprintf("timer fail\n"); return; }
         s_inited = RT_TRUE;
     }
 
-    s_wr = 0; s_rd = 0; s_tick = 0; s_ovf = 0;
-    s_finish = 0; s_abort = 0; s_target = n;
+    s_wr = 0; s_rd = 0; s_tick = 0; s_ovf = 0;     // 复位读写序号与统计量
+    s_finish = 0; s_abort = 0; s_target = n;       // 清标志并设定本次目标点数
 
-    rt_timer_start(g_log_timer);
+    rt_timer_start(g_log_timer);            // 先起节拍源，再拉起采样线程
 
-    rt_thread_t tid = rt_thread_create("logs", log_thread, RT_NULL, 2048, 10, 10);
+    rt_thread_t tid = rt_thread_create("logs", log_thread, RT_NULL, 2048, 10, 10);  // 栈 2KB，优先级 10，时间片 10
     if (tid == RT_NULL) { rt_timer_stop(g_log_timer); rt_kprintf("thread fail\n"); return; }
     rt_thread_startup(tid);
 
     /* 等采完；超时保护：n 点最多等 n*20ms */
-    rt_int32_t guard = (rt_int32_t)(n * 20);
+    rt_int32_t guard = (rt_int32_t)(n * 20);      // 每点预留 20ms 余量
     while (!s_finish && guard-- > 0) rt_thread_mdelay(1);
 
-    if (!s_finish)
+    if (!s_finish)                          // 超时：通知采样线程退出并停表
     {
         s_abort = 1;
         rt_timer_stop(g_log_timer);
         rt_kprintf("timeout\n");
-        rt_thread_mdelay(20);
+        rt_thread_mdelay(20);               // 留出时间让采样线程看到 abort 后退出
     }
 
-    dump_csv();
-    rt_kprintf("CSV END, points=%d ovf=%d\n", (int)s_wr, (int)s_ovf);
+    dump_csv();                             // 导出已采集数据
+    rt_kprintf("CSV END, points=%d ovf=%d\n", (int)s_wr, (int)s_ovf);  // 打印总点数与丢点数
 }
 MSH_CMD_EXPORT(imulog, sample IMU at 100Hz and dump CSV);
