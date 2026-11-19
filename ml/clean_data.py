@@ -27,7 +27,7 @@ MANIFEST = {
     "1_pickup":   6,   # 6144 点
     "2_shake_lr": 6,   # 6142 点，最后一轮少 2 个点
     "3_flip":     6,   # 6307 点，开头有一段截断的残段
-    "4_rotate":   5,   # 5120 点（删过 1 轮坏数据）
+    "4_rotate":   7,   # 5120 点（删过 1 轮坏数据）
 }
 
 CLASSES = list(MANIFEST.keys())
