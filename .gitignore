@@ -35,6 +35,12 @@ Objects/
 *.idb
 *.ilk
 
+# ---------- PC 端验证程序（firmware/ 下的 zig 编译产物）----------
+/firmware/*.exe
+/firmware/*.exp
+/firmware/*.lib
+/firmware/*.obj
+
 # ---------- Keil / MDK 个人配置 ----------
 *.uvguix*
 *.uvopt.bak
