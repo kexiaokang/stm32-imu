@@ -20,7 +20,7 @@
 #include <drv_gpio.h>
 
 #include <drv_lcd.h>
-#include <rttlogo.h>
+//#include <rttlogo.h>
 #include <board.h>
 
 #include <aht10.h>
@@ -47,11 +47,12 @@ void lcd_display(void *parameter)
     lcd_clear(WHITE);
 
     /* 显示 RT-Thread logo */
-    lcd_show_image(0, 0, 240, 69, image_rttlogo);
+    //lcd_show_image(0, 0, 240, 69, image_rttlogo);
 
     /* 设置背景色和前景色 */
     lcd_set_color(WHITE, BLACK);
 
+		#if 0   /* 11.23 屏幕不显示三个数，字库(11.8KB)随之下岗；恢复改 #if 1 */
     /* 打印结构体信息 */
     char buf[64];
     int y = 69; // 起始 Y 坐标
@@ -70,7 +71,7 @@ void lcd_display(void *parameter)
 
     /* 可选：画一条分割线 */
     lcd_draw_line(0, y, 240, y);
-
+		#endif
 
     return;
 }
