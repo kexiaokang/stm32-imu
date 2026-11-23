@@ -38,7 +38,8 @@ sys.path.insert(0, str(HERE))
 from train_baseline import NPZ, extract_features, recover_groups   # noqa: E402
 
 OUT_DIR = HERE.parent / "firmware"
-N_EST = 300
+OUT_DIR_BOARD = HERE.parent / "firmware" / "board"   # --board：只含全量模型，上板用
+N_EST = 100          # W10-1：从 300 砍到 100（体积降到 1/3，实测准确率不降反升）
 SEED = 42
 N_CASES = 25          # 导出多少个测试用例
 
@@ -166,8 +167,12 @@ def pick_cases(y, seed=0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--folds", action="store_true",
-                    help="额外导出 5 个折模型（W9-3 复现 95.1% 用，源码会大 5 倍）")
+                    help="额外导出 5 个折模型（复现 OOF 准确率用，源码会大 5 倍）")
+    ap.add_argument("--board", action="store_true",
+                    help="只导出【全量模型】到 firmware/board/（上板用，不含 5 折，体积最小）")
     args = ap.parse_args()
+    if args.board and args.folds:
+        ap.error("--board 和 --folds 不能同时用：上板只要 1 个全量模型")
 
     d = np.load(NPZ, allow_pickle=True)
     X = d["X"]
@@ -216,12 +221,14 @@ def main():
     print("[3] 测试用例 %d 个（每类 5 个）" % len(idx))
 
     # ---- 写文件 ----
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    hdr = (OUT_DIR / "model_data.h")
-    src = (OUT_DIR / "model_data.c")
-    cases = (OUT_DIR / "test_cases.h")
+    out_dir = OUT_DIR_BOARD if args.board else OUT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    hdr = (out_dir / "model_data.h")
+    src = (out_dir / "model_data.c")
+    cases = (out_dir / "test_cases.h")
 
-    hdr.write_text(HEADER_H, encoding="utf-8")
+    tpl_h = HEADER_H_BOARD if args.board else HEADER_H
+    hdr.write_text(tpl_h.replace("__N_EST__", str(N_EST)), encoding="utf-8")
 
     parts = [emit_model_c("full", "FOREST_FULL", full)]
     if fold_models:
@@ -235,7 +242,7 @@ def main():
             parts.append(emit_model_c("fold%d" % k, "FOLD%d" % k, m))
         parts.append("const Forest *FOLDS[5] = {&FOLD0, &FOLD1, &FOLD2, &FOLD3, &FOLD4};")
         parts.append("")
-    body = HEADER_C_HEAD + "\n".join(parts) + HEADER_C_TAIL
+    body = HEADER_C_HEAD + "\n".join(parts) + ("" if args.board else HEADER_C_TAIL)
     src.write_text(body, encoding="utf-8")
 
     cases.write_text(emit_test_cases(xs, pcls, pprob, y[idx], idx), encoding="utf-8")
@@ -293,7 +300,7 @@ typedef struct {
     int         n_trees;
 } Forest;
 
-extern const Forest FOREST_FULL;   /* 300 棵树，用全部 451 个窗口训练 */
+extern const Forest FOREST_FULL;   /* __N_EST__ 棵树，用全部 451 个窗口训练 */
 
 extern const char *CLASS_NAMES[N_CLASSES];
 
@@ -304,6 +311,59 @@ extern const char *CLASS_NAMES[N_CLASSES];
 extern const Forest *FOLDS[5];
 extern const int     FOLD_OF[];
 extern const int     FOLD_OF_LEN;
+
+#endif  /* MODEL_DATA_H */
+"""
+
+# 上板版：没有 5 折模型的声明（省体积，也避免链接到不存在的符号）
+HEADER_H_BOARD = """\
+/* 自动生成，不要手改。生成脚本：ml/export_model.py --board */
+#ifndef MODEL_DATA_H
+#define MODEL_DATA_H
+
+#include <stdint.h>
+
+#define N_CLASSES   5
+#define N_FEATURES  19
+
+/*
+ * 一棵树被"拍平"成一张节点表。
+ *
+ *   内部节点：left / right >= 0，prob 全 0
+ *   叶子节点：left == -1
+ *
+ * 走法（就这一个循环，整片森林都是它）：
+ *
+ *   int node = 0;
+ *   while (t->nodes[node].left != -1) {
+ *       node = (x[t->nodes[node].feature] <= t->nodes[node].threshold)
+ *              ? t->nodes[node].left
+ *              : t->nodes[node].right;
+ *   }
+ *   // 到这里 node 是叶子，概率在 t->nodes[node].prob[0..4]
+ */
+typedef struct {
+    int16_t feature;          /* 用第几维特征比较（0~18） */
+    int16_t left;             /* 左孩子下标；-1 表示叶子 */
+    int16_t right;            /* 右孩子下标；-1 表示叶子 */
+    float   threshold;        /* x[feature] <= threshold → 走左边 */
+    float   prob[N_CLASSES];  /* 叶子：归一化后的 5 类概率；内部节点：全 0 */
+} Node;
+
+typedef struct {
+    const Node *nodes;
+    int         n_nodes;
+    int         root;         /* 根节点下标，目前都是 0 */
+} Tree;
+
+typedef struct {
+    const Tree *trees;
+    int         n_trees;
+} Forest;
+
+extern const Forest FOREST_FULL;   /* __N_EST__ 棵树，用全部 451 个窗口训练 */
+
+extern const char *CLASS_NAMES[N_CLASSES];
 
 #endif  /* MODEL_DATA_H */
 """

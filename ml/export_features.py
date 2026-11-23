@@ -19,6 +19,7 @@ C 端要做的：拿同样 128×6 的原始数据，自己算出 19 个数，和
     python export_features.py
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from train_baseline import NPZ, extract_features, FEATURE_NAMES   # noqa: E402
 from export_model import pick_cases                               # noqa: E402
 
 OUT = HERE.parent / "firmware" / "features_test.h"
+OUT_BOARD = HERE.parent / "firmware" / "board" / "features_test.h"   # 上板版：只有 5 个窗口
 
 
 def dnum(x):
@@ -41,13 +43,27 @@ def dnum(x):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--board", action="store_true",
+                    help="上板版：只导 5 个窗口（每类 1 个）到 firmware/board/，"
+                         "Flash 只有 512 KB，25 个窗口塞不下")
+    args = ap.parse_args()
+
     d = np.load(NPZ, allow_pickle=True)
     X = d["X"]
     y = d["y"].astype(int)
 
-    idx = pick_cases(y)                 # 和 W9-1 用同一批 25 个窗口
-    raw = X[idx]                        # (25, 128, 6) int16
-    feat = extract_features(X[idx])     # (25, 19) float64  ← 标准答案
+    idx = pick_cases(y)                 # 和 W9-1 用同一批 25 个窗口（每类 5 个，按类别排好）
+    if args.board:
+        # pick_cases 的顺序是 0,0,0,0,0, 1,1,1,1,1, ...，取下标 0/5/10/15/20 就是每类 1 个
+        idx = [idx[0], idx[5], idx[10], idx[15], idx[20]]
+        out = OUT_BOARD
+    else:
+        out = OUT
+
+    raw = X[idx]                        # (N, 128, 6) int16
+    feat = extract_features(X[idx])     # (N, 19) float64  ← 标准答案
+    true_label = y[idx]                 # 真实类别，报错时和预测类别对照
 
     lines = []
     lines.append("/* 自动生成，不要手改。生成脚本：ml/export_features.py */")
@@ -87,13 +103,19 @@ def main():
     lines.append("  " + ", ".join(str(int(i)) for i in idx))
     lines.append("};")
     lines.append("")
+    lines.append("/* 真实类别（不是模型预测），用来判断类别这一步对不对 */")
+    lines.append("static const int FEAT_TRUE_LABEL[N_FEAT_CASES] = {")
+    lines.append("  " + ", ".join(str(int(v)) for v in true_label))
+    lines.append("};")
+    lines.append("")
     lines.append("#endif  /* FEATURES_TEST_H */")
     lines.append("")
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text("\n".join(lines), encoding="utf-8")
-    print("窗口 %d 个，每个 %d 点 × %d 轴" % (len(idx), raw.shape[1], raw.shape[2]))
-    print("  -> %s  %.1f KB" % (OUT.name, OUT.stat().st_size / 1024))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("窗口 %d 个，每个 %d 点 × %d 轴%s"
+          % (len(idx), raw.shape[1], raw.shape[2], "（上板版）" if args.board else ""))
+    print("  -> %s  %.1f KB" % (out, out.stat().st_size / 1024))
     print()
     print("特征范围（用来判断算错没算错）：")
     for i, nm in enumerate(FEATURE_NAMES):

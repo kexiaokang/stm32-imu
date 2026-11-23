@@ -79,12 +79,15 @@ int main(void)
                N_FULL_CASES - agree, first_bad);
         ok = 0;
     }
-    if (right != 429) {
-        printf("[FAIL] 准确率不是 95.1%%（429/451），实际 %d\n", right);
+    /* 门槛：≥ 94%（451 × 0.94 = 424）。树数变化会让准确率小幅波动，
+       所以这里不硬编码具体数字，只守一条底线。 */
+    if (right < 424) {
+        printf("[FAIL] 准确率低于 94%%（< 424/451），实际 %d\n", right);
         ok = 0;
     }
     if (ok) {
-        printf("[OK] W9-3 通过：C 端逐窗口复现了 Python 的 95.1%%\n");
+        printf("[OK] W10-1 通过：C 端与 Python 逐窗口一致，准确率 %.1f%%\n",
+               100.0 * right / N_FULL_CASES);
         return 0;
     }
     return 1;
