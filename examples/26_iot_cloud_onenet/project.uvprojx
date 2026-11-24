@@ -563,6 +563,11 @@
               <FileType>1</FileType>
               <FilePath>.\applications\board\features.c</FilePath>
             </File>
+            <File>
+              <FileName>imu_recognize.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\applications\board\imu_recognize.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
